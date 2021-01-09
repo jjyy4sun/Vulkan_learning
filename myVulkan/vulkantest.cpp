@@ -27,9 +27,10 @@ enum class DEVICE_PICK_STRATEGY
 
 struct QueueFamilyIndices {
 	int graphicsFamily = -1;
+	int presentFamily = -1;
 
 	bool isComplete() {
-		return graphicsFamily >= 0;
+		return graphicsFamily >= 0 && presentFamily >= 0;
 	}
 };
 
@@ -66,7 +67,9 @@ private:
 	void initVulKan() {
 		creatInstance();
 		setupDebugCallback();
+		createSurface();
 		pickPhysicalDeivce();
+		createLogicalDevice();
 	}
 
 	void mainLoop() {
@@ -76,9 +79,11 @@ private:
 	}
 
 	void cleanup() {
+		vkDestroyDevice(device, nullptr);
 		if (enableValidationLayers) {
 			DestroyDebugUtilsMessengerEXT(instance, callback, nullptr);
 		}
+		vkDestroySurfaceKHR(instance, surface, nullptr);
 		vkDestroyInstance(instance, nullptr);
 		glfwDestroyWindow(window);
 		glfwTerminate();
@@ -216,7 +221,8 @@ private:
 		vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
 		QueueFamilyIndices indices = findQueueFamilies(device);
 
-		return deviceProperites.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU 
+		return (deviceProperites.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
+			|| deviceProperites.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)
 			&& deviceFeatures.geometryShader
 			&& indices.isComplete();
 	}
@@ -230,6 +236,9 @@ private:
 		QueueFamilyIndices indices = findQueueFamilies(device);
 		if (deviceProperites.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
 			score += 1000;
+		}
+		else if (deviceProperites.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
+			score += 500;
 		}
 
 		score += deviceProperites.limits.maxImageDimension2D;
@@ -282,6 +291,7 @@ private:
 
 	QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device) {
 		QueueFamilyIndices indices;
+		VkBool32 presentSupport = false;
 
 		uint32_t queueFamilyCount = 0;
 		vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
@@ -292,8 +302,12 @@ private:
 
 		int i = 0;
 		for (const auto& queueFamily : queuFamilies) {
+			vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
 			if (queueFamily.queueCount > 0 && queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
 				indices.graphicsFamily = i;
+			}
+			if (queueFamily.queueCount > 0 && presentSupport) {
+				indices.presentFamily = i;
 			}
 
 			if (indices.isComplete()) {
@@ -305,11 +319,60 @@ private:
 		return indices;
 	}
 
+	void createLogicalDevice() {
+		auto indices = findQueueFamilies(physicalDeivce);
+		VkDeviceQueueCreateInfo queueCreateInfo = {};
+		float queuePriority = 1.0f;
+		queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+		queueCreateInfo.queueFamilyIndex = indices.graphicsFamily;
+		queueCreateInfo.queueCount = 1;
+		queueCreateInfo.pQueuePriorities = &queuePriority;
+
+		VkPhysicalDeviceFeatures deviceFeatures = {};
+		VkDeviceCreateInfo createInfo = {};
+		createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+		createInfo.pQueueCreateInfos = &queueCreateInfo;
+		createInfo.queueCreateInfoCount = 1;
+		createInfo.pEnabledFeatures = &deviceFeatures;
+
+		if (vkCreateDevice(physicalDeivce, &createInfo, nullptr, &device) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create logical deveice!");
+		}
+
+		vkGetDeviceQueue(device, indices.graphicsFamily, 0, &graphicsQueue);
+
+		if (graphicsQueue == VK_NULL_HANDLE) {
+			throw std::runtime_error("failed to get graphics queue!");
+		}
+
+	}
+
+	void createSurface() {
+#if 0
+		VkWin32SurfaceCreateInfoKHR createInfo = {};
+		createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+		createInfo.hwnd = glfwGetWin32Window(window);
+		createInfo.hiinstance = GetModuleHandle(nullptr);
+		auto CreateWin32SurfaceKHR = (PFN_vkCreateWin32SurfaceKHR)vkGetInstanceProcAddr(instance, "vkCreateWin32SurfaceKHR");
+		if (!CreatWin32SurfaceKHR || CreateWin32SurfaceKHR(instance, &createInfo, nullptr, &surface) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create window face!");
+		}
+#else
+		if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create window surface!");
+		}
+#endif
+	}
+
 	GLFWwindow* window;
 	VkInstance instance;
 	VkDebugUtilsMessengerEXT callback;
 	VkPhysicalDevice physicalDeivce{ VK_NULL_HANDLE };
 	DEVICE_PICK_STRATEGY pickStrategy{ DEVICE_PICK_STRATEGY::kPickFirstSuitable };
+	VkDevice device;
+	VkQueue graphicsQueue;
+	VkQueue presentQueue;
+	VkSurfaceKHR surface;
 };
 
 int main() {
